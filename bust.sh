@@ -11,10 +11,11 @@
 #=@ ## Parameters
 #=@  
 #=@ -h				Help
+#=@ -W sleep			Wait this many seconds between attempts. Should be numerical and greater than 0. Some sites may return 200 OK on everyting if you ask too quick. 
 #=@ -w wordlist|number|0number	Wordlist (=file) to use. If a number (not a file), then count until this number. If the number starts with 0, pad the number with leading zero's.
-#=@ -u url			URL. Whatever url. This is PREpended to the words (or numbers) from -w
+#=@ -u url			URL. Whatever url. This is PREpended to the words (or numbers) from the wordlist -w
 #=@ -s seperator		Seperator. Often this is /. Sometimes a blank is needed to let a counter append to the URL. See examples.
-#=@ -x extensions		Extensions to check. Each word from wordlist has this extension appended. See examples.
+#=@ -x extensions		Extensions to check. Each word from wordlist has this extension appended. Use a forward slash / to test for directories. See examples.
 #=@ -t threads			Number of checks to perform in parallel. Should be numerical and greater than 0.
 #=@ -m method			A HTTP-method can be specified. Usually GET, HEAD or POST.
 #=@ -v				Verbose output. Also show responses other than 200 or 301/302.
@@ -29,7 +30,7 @@
 
 # -- Globals, constants
 
-WORDLIST="/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt"
+WORDLIST="${HOME}/SecLists/Discovery/Web-Content/directory-list-2.3-medium.txt"
 EXT=".php .html /"
 SEP="/"
 THREADS="10"
@@ -39,6 +40,7 @@ USERAGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, 
 VERBOSE=""
 COLORIZE=""
 DOWNLOAD=""
+SLEEP=0
 
 RED=""
 REDINBL=""
@@ -56,39 +58,39 @@ SCRIPT="$0"
 # -- Functions
 
 printc() {
-	if [ "x${COLORIZE}x" != "xx" ]; then
-		STROUT=""
-		OPT="$1"
-		shift
-		case "$OPT" in
-		WTF)
-			STROUT="$WTF $@"
+	STROUT=""
+	OPT="$1"
+	shift
+	case "$OPT" in
+	WTF)
+		STROUT="$WTF $@"
+		STRADD="\n"
+		;;
+	OK)
+		STROUT="$OK $@"
+		STRADD="\n"
+		;;
+	NOK)
+		STROUT="$NOK $@"
+		STRADD="\n"
+		;;
+	NOKR)
+		STROUT="$NOK $@"
+		STRADD="\r"
+		;;
+	*)
+		if [ "x${VERBOSE}x" != "xx" ]; then
+			STROUT="$@"
 			STRADD="\n"
-			;;
-		OK)
-			STROUT="$OK $@"
-			STRADD="\n"
-			;;
-		NOK)
-			STROUT="$NOK $@"
-			STRADD="\n"
-			;;
-		NOKR)
-			STROUT="$NOK $@"
-			STRADD="\r"
-			;;
-		*)
-			echo "### $@"
-			;;
-		esac
-		PADNR=$(( $(tput cols) - $(echo -n $STROUT | wc -c) - 1))
-		PADOUT="$(printf %${PADNR}s ' ')"
-		STROUT="${STROUT}${PADOUT}${STRADD}"
-		echo -en "${STROUT}"
-	else
-		shift
-		echo "$@"
-	fi
+		else
+			return 0
+		fi
+		;;
+	esac
+	PADNR=$(( $(tput cols) - $(echo -n $STROUT | wc -c) - 1))
+	PADOUT="$(printf %${PADNR}s ' ')"
+	STROUT="${STROUT}${PADOUT}${STRADD}"
+	echo -en "${STROUT}"
 	return 0
 }
 
@@ -115,18 +117,23 @@ geturl() {
 	if [ -z "$myurl" ]; then
 		die "Missing url"
 	fi
-	FOUND="$(curl -X $METHOD -A "$USERAGENT" -c $TMPFILE -b $TMPFILE -v -m 1 "$myurl" 2>&1 | strings | grep '^< ' | head -n 1 | awk '{print $3}')"
+	# Weird construction to get single quotes '' around a variable and still have variable expansion
+	AGENT="-A '"
+	AGENT="${AGENT}$USERAGENT"
+	AGENT="${AGENT}'"
+	CMD="curl -X $METHOD $AGENT -c $TMPFILE -b $TMPFILE -v -m 1 -e \"$(dirname $myurl 2>/dev/null)\" \"$myurl\""
+	FOUND="$(eval $CMD 2>&1 | strings | grep '^< ' | head -n 1 | awk '{print $3}')"
 	hasretval=2
 	case $FOUND in
 	200)
 		printc OK "${GREEN}$myurl${EOC} --> $FOUND"
 		hasretval=0
-		if [ "x${DOWNLOAD}x" != "xx" ]; then
+		if [ "x${DOWNLOAD}x" != "Xx" ]; then
 			wget -q -U "$USERAGENT" "$myurl"
 		fi
 		;;
 	301|302)
-		LOC="$(curl -X $METHOD -A "$USERAGENT" -c $TMPFILE -b $TMPFILE -v -m 1 "$myurl" 2>&1 | strings | grep -i '^< Location' | head -n 1 | awk '{print $3}')"
+		LOC="$(eval $CMD 2>&1 | strings | grep -i '^< Location' | head -n 1 | awk '{print $3}')"
 		printc OK "$myurl --> $FOUND --> $LOC"
 		hasretval=0
 		;;
@@ -142,9 +149,12 @@ geturl() {
 
 # -- Parameter parsing
 
-while getopts w:x:u:t:s:m:hpvcd param
+while getopts W:w:x:u:t:s:m:hpvcd param
 do
 	case $param in
+	W)
+		SLEEP="${OPTARG}"
+		;;
 	w)
 		WORDLIST="${OPTARG}"
 		;;
@@ -209,6 +219,14 @@ if [ ! -w "$TMPFILE" ]; then
 	die "Cannot write $TMPFILE"
 fi
 
+if expr "$SLEEP" + 1 >/dev/null 2>&1 -ne 0; then
+	die "$SLEEP is not a number"
+fi
+
+if [ $SLEEP -lt 0 ]; then
+	die "Wait between attempts cannot be below 0"
+fi
+
 if expr "$THREADS" + 1 >/dev/null 2>&1 -ne 0; then
 	die "Threads is not a number"
 fi
@@ -234,10 +252,9 @@ else
 fi
 
 if tty >/dev/null 2>&1; then
-	echo -e "${REDINBL}******************************************************************${EOC}"
+	echo -e "${REDINBL}*****************************************************************${EOC}"
 	echo -e "${REDINBL}***${EOC}  ${RED}WARNING! BRUTEFORCE DIRECTORY BUSTING IS ABOUT TO START  ${REDINBL}***${EOC}"
-	echo -e "${REDINBL}******************************************************************${EOC}"
-	echo -e "${URL}${SEP}$(eval $GETWORDS | head -n 1)$(echo $EXT | awk '{print $1}')"
+	echo -e "${REDINBL}*****************************************************************${EOC}"
 	echo -e "TARGET URL: $URL"
 	echo -e "SEPERATOR: $SEP"
 	echo -e "FILE EXTENSIONS SCANNED FOR: $EXT"
@@ -246,7 +263,8 @@ if tty >/dev/null 2>&1; then
 	echo -e "THREADS: $THREADS"
 	echo -e "COLORIZED: $COLORIZE"
 	echo -e "VERBOSE: $VERBOSE"
-	echo -e "DOWNLOAD IF FOUND: $DOWNLOAD"
+	echo -e "WAIT: $SLEEP"
+	echo -e "DOWNLOAD IF FOUND: $(test -z $DOWNLOAD && echo NO || echo YES)"
 	echo -e "...Or hit CTRL+C ${YELLOW}RIGHT NOW!${EOC}"
 	read -t 3 dummy
 	echo "Here we go..."
@@ -256,7 +274,6 @@ fi
 # -- Main
 
 COUNT="$THREADS"
-echo $GETWORDS
 eval $GETWORDS | while read line
 do
 	if [ ! -z "$EXT" ]; then
@@ -268,6 +285,7 @@ do
 				COUNT=$THREADS
 			fi
 			browse="${URL}${SEP}${line}${ext}"
+			sleep "$SLEEP"
 			geturl "$browse" &
 		done
 	else
@@ -277,6 +295,7 @@ do
 			COUNT=$THREADS
 		fi
 		browse="${URL}${SEP}${line}"
+		sleep "$SLEEP"
 		geturl "$browse" &
 	fi
 done

@@ -128,7 +128,7 @@ geturl() {
 	200)
 		printc OK "${GREEN}$myurl${EOC} --> $FOUND"
 		hasretval=0
-		if [ "x${DOWNLOAD}x" != "Xx" ]; then
+		if [ "x${DOWNLOAD}x" != "xx" ]; then
 			wget -q -U "$USERAGENT" "$myurl"
 		fi
 		;;
